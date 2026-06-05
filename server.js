@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const helmet = require("helmet");
+const nodemailer = require("nodemailer");
 require("dotenv").config();
 
 const app = express();
@@ -11,8 +12,8 @@ const app = express();
 // â”€â”€ MIDDLEWARE â”€â”€
 app.use(helmet());
 app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
 // â”€â”€ DB CONNECTION â”€â”€
 const connectDB = async () => {
@@ -27,7 +28,40 @@ const connectDB = async () => {
 };
 connectDB();
 
-// â”€â”€ USER SCHEMA â”€â”€
+// â”€â”€ NODEMAILER SETUP â”€â”€
+const createTransporter = () => {
+  const user = process.env.EMAIL_USER || "oceancrewz47@gmail.com";
+  const pass = process.env.EMAIL_PASS || "Applez@222";
+  if (!user || !pass) return null;
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: { user, pass },
+  });
+};
+
+const sendEmail = async (to, subject, html) => {
+  const transporter = createTransporter();
+  if (!transporter) {
+    console.log(`[EMAIL FALLBACK] To: ${to} | Subject: ${subject}`);
+    return true;
+  }
+  try {
+    await transporter.sendMail({
+      from: `"OceanCrew" <${process.env.EMAIL_USER || "oceancrewz47@gmail.com"}>`,
+      to, subject, html,
+    });
+    return true;
+  } catch (err) {
+    console.error("Email send error:", err.message);
+    return false;
+  }
+};
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ SCHEMAS â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// USER
 const userSchema = new mongoose.Schema({
   name:        { type: String, required: true, trim: true },
   email:       { type: String, required: true, unique: true, lowercase: true },
@@ -37,11 +71,13 @@ const userSchema = new mongoose.Schema({
   rank:        { type: String },
   companyName: { type: String },
   approved:    { type: Boolean, default: false },
+  resetOtp:    { type: String },
+  resetOtpExpiry: { type: Date },
   createdAt:   { type: Date, default: Date.now },
 });
 const User = mongoose.models.User || mongoose.model("User", userSchema);
 
-// â”€â”€ JOB SCHEMA â”€â”€
+// JOB
 const jobSchema = new mongoose.Schema({
   title:       { type: String, required: true },
   company:     { type: String, required: true },
@@ -49,14 +85,16 @@ const jobSchema = new mongoose.Schema({
   rank:        { type: String },
   salary:      { type: String },
   location:    { type: String },
+  duration:    { type: String },
   description: { type: String },
   requirements:{ type: [String], default: [] },
-  status:      { type: String, enum: ["open", "closed"], default: "open" },
+  urgent:      { type: Boolean, default: false },
+  status:      { type: String, enum: ["open", "closed", "paused"], default: "open" },
   createdAt:   { type: Date, default: Date.now },
 });
 const Job = mongoose.models.Job || mongoose.model("Job", jobSchema);
 
-// â”€â”€ APPLICATION SCHEMA â”€â”€
+// APPLICATION
 const appSchema = new mongoose.Schema({
   job:       { type: mongoose.Schema.Types.ObjectId, ref: "Job" },
   seafarer:  { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -64,10 +102,47 @@ const appSchema = new mongoose.Schema({
   email:     { type: String },
   rank:      { type: String },
   message:   { type: String },
-  status:    { type: String, enum: ["pending", "reviewed", "accepted", "rejected"], default: "pending" },
+  status:    { type: String, enum: ["Applied", "Shortlisted", "Interview", "Offer", "Hired", "Rejected"], default: "Applied" },
   createdAt: { type: Date, default: Date.now },
 });
 const Application = mongoose.models.Application || mongoose.model("Application", appSchema);
+
+// CV
+const cvSchema = new mongoose.Schema({
+  seafarerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, unique: true },
+  fileName:   { type: String },
+  fileData:   { type: String }, // Base64
+  mimeType:   { type: String, default: "application/pdf" },
+  uploadedAt: { type: Date, default: Date.now },
+  status:     { type: String, enum: ["pending", "processing", "ready"], default: "pending" },
+  adminNote:  { type: String },
+});
+const CV = mongoose.models.CV || mongoose.model("CV", cvSchema);
+
+// NOTIFICATION
+const notifSchema = new mongoose.Schema({
+  userId:    { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  icon:      { type: String, default: "bell" },
+  msg:       { type: String, required: true },
+  type:      { type: String, default: "info" }, // pipeline, match, offer, badge, cv, payment
+  link:      { type: String }, // tab to navigate to when clicked
+  read:      { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
+});
+const Notification = mongoose.models.Notification || mongoose.model("Notification", notifSchema);
+
+// PAYMENT / SUBSCRIPTION
+const paymentSchema = new mongoose.Schema({
+  userId:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  plan:       { type: String },
+  amount:     { type: Number },
+  method:     { type: String, enum: ["bank_transfer", "card"], default: "bank_transfer" },
+  status:     { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  reference:  { type: String },
+  adminNote:  { type: String },
+  createdAt:  { type: Date, default: Date.now },
+});
+const Payment = mongoose.models.Payment || mongoose.model("Payment", paymentSchema);
 
 // â”€â”€ JWT HELPER â”€â”€
 const makeToken = (id) =>
@@ -80,15 +155,21 @@ const protect = async (req, res, next) => {
   try {
     const decoded = jwt.verify(auth.split(" ")[1], process.env.JWT_SECRET || "oceancrew_secret_2024");
     req.user = await User.findById(decoded.id).select("-password");
+    if (!req.user) return res.status(401).json({ message: "User not found" });
     next();
   } catch {
     res.status(401).json({ message: "Invalid token" });
   }
 };
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+const adminOnly = (req, res, next) => {
+  if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
+  next();
+};
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // â”€â”€ AUTH ROUTES â”€â”€
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 // REGISTER
 app.post("/api/auth/register", async (req, res) => {
@@ -129,23 +210,86 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// GET PROFILE
+// GET MY PROFILE
 app.get("/api/auth/me", protect, async (req, res) => {
   res.json(req.user);
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// â”€â”€ JOBS ROUTES â”€â”€
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// FORGOT PASSWORD â€” sends OTP
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ message: "Email is required" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "No account found with that email" });
 
-// GET ALL JOBS
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date(Date.now() + 15 * 60 * 1000); // 15 min
+
+    await User.findByIdAndUpdate(user._id, { resetOtp: otp, resetOtpExpiry: expiry });
+
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
+        <h2 style="color:#0284C7;margin-bottom:8px;">OceanCrew Password Reset</h2>
+        <p style="color:#4a5568;margin-bottom:24px;">Your One-Time Password (OTP) to reset your password:</p>
+        <div style="background:#1a2332;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px;">
+          <span style="font-size:36px;font-weight:700;color:#38BDF8;letter-spacing:8px;">${otp}</span>
+        </div>
+        <p style="color:#94A3B8;font-size:13px;">This OTP expires in <strong>15 minutes</strong>. Do not share it with anyone.</p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+        <p style="color:#CBD5E1;font-size:11px;">If you did not request this, please ignore this email.</p>
+      </div>`;
+
+    await sendEmail(email, "OceanCrew â€” Password Reset OTP", html);
+    res.json({ message: "OTP sent to your email" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error: " + err.message });
+  }
+});
+
+// VERIFY OTP + RESET PASSWORD
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body;
+    if (!email || !otp || !newPassword) return res.status(400).json({ message: "All fields required" });
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.resetOtp !== otp) return res.status(400).json({ message: "Invalid OTP" });
+    if (!user.resetOtpExpiry || new Date() > user.resetOtpExpiry)
+      return res.status(400).json({ message: "OTP expired. Please request a new one." });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await User.findByIdAndUpdate(user._id, { password: hashed, resetOtp: null, resetOtpExpiry: null });
+    res.json({ message: "Password reset successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Server error: " + err.message });
+  }
+});
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ JOBS ROUTES â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// GET ALL OPEN JOBS
 app.get("/api/jobs", async (req, res) => {
   try {
     const { rank, search } = req.query;
     let query = { status: "open" };
-    if (rank) query.rank = rank;
+    if (rank && rank !== "All") query.rank = rank;
     if (search) query.$or = [{ title: new RegExp(search, "i") }, { company: new RegExp(search, "i") }];
     const jobs = await Job.find(query).sort({ createdAt: -1 }).limit(50);
+    res.json(jobs);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET MY POSTED JOBS (company)
+app.get("/api/jobs/mine", protect, async (req, res) => {
+  try {
+    const jobs = await Job.find({ companyId: req.user._id }).sort({ createdAt: -1 });
     res.json(jobs);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -157,13 +301,23 @@ app.post("/api/jobs", protect, async (req, res) => {
   try {
     if (req.user.role !== "company" && req.user.role !== "admin")
       return res.status(403).json({ message: "Only companies can post jobs" });
-    const { title, rank, salary, location, description, requirements } = req.body;
+    const { title, rank, salary, location, duration, description, requirements, urgent } = req.body;
     const job = await Job.create({
-      title, rank, salary, location, description, requirements,
+      title, rank, salary, location, duration, description, requirements, urgent,
       company: req.user.companyName || req.user.name,
       companyId: req.user._id,
     });
     res.status(201).json(job);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// UPDATE JOB STATUS (company)
+app.put("/api/jobs/:id", protect, async (req, res) => {
+  try {
+    const job = await Job.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(job);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -179,9 +333,9 @@ app.delete("/api/jobs/:id", protect, async (req, res) => {
   }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // â”€â”€ APPLICATIONS ROUTES â”€â”€
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 // APPLY TO JOB
 app.post("/api/applications", protect, async (req, res) => {
@@ -214,7 +368,10 @@ app.get("/api/applications/company", protect, async (req, res) => {
   try {
     const myJobs = await Job.find({ companyId: req.user._id });
     const jobIds = myJobs.map(j => j._id);
-    const apps = await Application.find({ job: { $in: jobIds } }).sort({ createdAt: -1 });
+    const apps = await Application.find({ job: { $in: jobIds } })
+      .populate("job", "title salary vessel")
+      .populate("seafarer", "name email rank")
+      .sort({ createdAt: -1 });
     res.json(apps);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -224,21 +381,276 @@ app.get("/api/applications/company", protect, async (req, res) => {
 // UPDATE APPLICATION STATUS (company)
 app.put("/api/applications/:id", protect, async (req, res) => {
   try {
-    const app = await Application.findByIdAndUpdate(req.params.id, { status: req.body.status }, { new: true });
-    res.json(app);
+    const appl = await Application.findByIdAndUpdate(req.params.id, { status: req.body.status }, { new: true })
+      .populate("seafarer", "_id name email");
+    if (!appl) return res.status(404).json({ message: "Application not found" });
+
+    // Create notification for seafarer
+    if (appl.seafarer?._id) {
+      const msgs = {
+        Shortlisted: { msg: `You have been shortlisted! â€” ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
+        Interview:   { msg: `Interview scheduled for ${appl.job?.title || "a job"}`, icon: "clock", type: "pipeline", link: "applications" },
+        Offer:       { msg: `You received an offer! Review now.`, icon: "zap", type: "offer", link: "applications" },
+        Hired:       { msg: `Congratulations! You have been hired.`, icon: "checkCircle", type: "pipeline", link: "applications" },
+        Rejected:    { msg: `Application update for ${appl.job?.title || "a job"}`, icon: "x", type: "pipeline", link: "applications" },
+      };
+      const n = msgs[req.body.status];
+      if (n) {
+        await Notification.create({ userId: appl.seafarer._id, ...n });
+      }
+    }
+    res.json(appl);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// â”€â”€ ADMIN ROUTES â”€â”€
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ NOTIFICATIONS ROUTES â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// GET ALL USERS (admin)
-app.get("/api/admin/users", protect, async (req, res) => {
+// GET MY NOTIFICATIONS
+app.get("/api/notifications", protect, async (req, res) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
+    const notifs = await Notification.find({ userId: req.user._id }).sort({ createdAt: -1 }).limit(30);
+    res.json(notifs);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// MARK NOTIFICATION READ
+app.put("/api/notifications/:id/read", protect, async (req, res) => {
+  try {
+    await Notification.findByIdAndUpdate(req.params.id, { read: true });
+    res.json({ message: "Marked as read" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// MARK ALL READ
+app.put("/api/notifications/read-all", protect, async (req, res) => {
+  try {
+    await Notification.updateMany({ userId: req.user._id }, { read: true });
+    res.json({ message: "All marked as read" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// SEND NOTIFICATION TO USER (company/admin)
+app.post("/api/notifications/send", protect, async (req, res) => {
+  try {
+    const { userId, msg, icon, type, link } = req.body;
+    const notif = await Notification.create({ userId, msg, icon: icon || "bell", type: type || "info", link });
+    res.status(201).json(notif);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ CV ROUTES â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// UPLOAD CV (seafarer)
+app.post("/api/cv/upload", protect, async (req, res) => {
+  try {
+    if (req.user.role !== "seafarer") return res.status(403).json({ message: "Seafarers only" });
+    const { fileName, fileData, mimeType } = req.body;
+    if (!fileData) return res.status(400).json({ message: "File data required" });
+
+    const cv = await CV.findOneAndUpdate(
+      { seafarerId: req.user._id },
+      { fileName, fileData, mimeType: mimeType || "application/pdf", uploadedAt: new Date(), status: "pending" },
+      { upsert: true, new: true }
+    );
+
+    // Notify admin(s)
+    const admins = await User.find({ role: "admin" });
+    await Promise.all(admins.map(admin =>
+      Notification.create({
+        userId: admin._id,
+        msg: `${req.user.name} uploaded a CV for processing`,
+        icon: "fileText",
+        type: "cv",
+        link: "cv",
+      })
+    ));
+
+    res.status(201).json({ message: "CV uploaded successfully", cv: { _id: cv._id, fileName: cv.fileName, status: cv.status, uploadedAt: cv.uploadedAt } });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET MY CV STATUS (seafarer)
+app.get("/api/cv/my", protect, async (req, res) => {
+  try {
+    const cv = await CV.findOne({ seafarerId: req.user._id }).select("-fileData");
+    res.json(cv || null);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET ALL CVs (admin)
+app.get("/api/cv/all", protect, adminOnly, async (req, res) => {
+  try {
+    const cvs = await CV.find({}).populate("seafarerId", "name email rank").select("-fileData").sort({ uploadedAt: -1 });
+    res.json(cvs);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// DOWNLOAD CV file (admin)
+app.get("/api/cv/:id/download", protect, adminOnly, async (req, res) => {
+  try {
+    const cv = await CV.findById(req.params.id);
+    if (!cv) return res.status(404).json({ message: "CV not found" });
+    const buf = Buffer.from(cv.fileData, "base64");
+    res.set("Content-Type", cv.mimeType || "application/pdf");
+    res.set("Content-Disposition", `attachment; filename="${cv.fileName || "cv.pdf"}"`);
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ADMIN â€” Send generated CV via email
+app.post("/api/cv/:id/send-email", protect, adminOnly, async (req, res) => {
+  try {
+    const cv = await CV.findById(req.params.id).populate("seafarerId", "name email");
+    if (!cv) return res.status(404).json({ message: "CV not found" });
+    const { emailContent } = req.body;
+
+    const html = emailContent || `
+      <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;">
+        <h2 style="color:#0284C7;">Your OceanCrew CV is Ready!</h2>
+        <p>Dear ${cv.seafarerId.name},</p>
+        <p>Your professional maritime CV has been prepared by the OceanCrew admin team. Please find it attached.</p>
+        <p>If you have any questions, reply to this email.</p>
+        <br><p style="color:#94A3B8;font-size:12px;">â€” OceanCrew Team</p>
+      </div>`;
+
+    await sendEmail(cv.seafarerId.email, "Your OceanCrew Professional CV", html);
+    await CV.findByIdAndUpdate(req.params.id, { status: "ready" });
+
+    // Notify the seafarer
+    await Notification.create({
+      userId: cv.seafarerId._id,
+      msg: "Your professional CV has been sent to your email!",
+      icon: "award",
+      type: "cv",
+      link: "cv",
+    });
+
+    res.json({ message: "CV email sent successfully" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ PAYMENTS â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// SUBMIT BANK TRANSFER REQUEST
+app.post("/api/payments/bank-transfer", protect, async (req, res) => {
+  try {
+    const { plan, amount, reference } = req.body;
+    const payment = await Payment.create({
+      userId: req.user._id, plan, amount, method: "bank_transfer", reference, status: "pending"
+    });
+    // Notify admins
+    const admins = await User.find({ role: "admin" });
+    await Promise.all(admins.map(admin =>
+      Notification.create({
+        userId: admin._id,
+        msg: `Bank transfer submitted by ${req.user.name} â€” Plan: ${plan} â€” Ref: ${reference}`,
+        icon: "dollarSign",
+        type: "payment",
+        link: "payments",
+      })
+    ));
+    res.status(201).json({ message: "Payment request submitted. Admin will verify within 24 hours.", payment });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GET MY PAYMENTS
+app.get("/api/payments/my", protect, async (req, res) => {
+  try {
+    const payments = await Payment.find({ userId: req.user._id }).sort({ createdAt: -1 });
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ADMIN â€” Get all payments
+app.get("/api/payments/all", protect, adminOnly, async (req, res) => {
+  try {
+    const payments = await Payment.find({}).populate("userId", "name email role").sort({ createdAt: -1 });
+    res.json(payments);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ADMIN â€” Approve/reject payment
+app.put("/api/payments/:id", protect, adminOnly, async (req, res) => {
+  try {
+    const payment = await Payment.findByIdAndUpdate(req.params.id, req.body, { new: true })
+      .populate("userId", "name email");
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    const approved = payment.status === "approved";
+    // Notify user
+    await Notification.create({
+      userId: payment.userId._id,
+      msg: approved
+        ? `Your payment for ${payment.plan} plan has been approved! ðŸŽ‰`
+        : `Payment for ${payment.plan} plan was not approved. Contact support.`,
+      icon: approved ? "checkCircle" : "xCircle",
+      type: "payment",
+      link: "subscription",
+    });
+
+    // Send invoice email if approved
+    if (approved) {
+      const html = `
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
+          <h2 style="color:#0284C7;">Payment Confirmed â€” OceanCrew</h2>
+          <p>Dear ${payment.userId.name},</p>
+          <p>Your payment has been verified and your subscription is now active.</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+            <tr><td style="padding:8px;color:#64748b;">Plan</td><td style="padding:8px;font-weight:700;">${payment.plan}</td></tr>
+            <tr><td style="padding:8px;color:#64748b;">Amount</td><td style="padding:8px;font-weight:700;">$${payment.amount}</td></tr>
+            <tr><td style="padding:8px;color:#64748b;">Method</td><td style="padding:8px;">Bank Transfer</td></tr>
+            <tr><td style="padding:8px;color:#64748b;">Reference</td><td style="padding:8px;font-family:monospace;">${payment.reference || "N/A"}</td></tr>
+          </table>
+          <p style="color:#94A3B8;font-size:12px;">Thank you for choosing OceanCrew. â€” OceanCrew Team</p>
+        </div>`;
+      await sendEmail(payment.userId.email, "OceanCrew â€” Payment Invoice", html);
+    }
+
+    res.json(payment);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ ADMIN ROUTES â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+// GET ALL USERS
+app.get("/api/admin/users", protect, adminOnly, async (req, res) => {
+  try {
     const users = await User.find({}).select("-password").sort({ createdAt: -1 });
     res.json(users);
   } catch (err) {
@@ -246,10 +658,9 @@ app.get("/api/admin/users", protect, async (req, res) => {
   }
 });
 
-// APPROVE/REJECT COMPANY (admin)
-app.put("/api/admin/users/:id", protect, async (req, res) => {
+// UPDATE USER
+app.put("/api/admin/users/:id", protect, adminOnly, async (req, res) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
     const user = await User.findByIdAndUpdate(req.params.id, req.body, { new: true }).select("-password");
     res.json(user);
   } catch (err) {
@@ -257,10 +668,9 @@ app.put("/api/admin/users/:id", protect, async (req, res) => {
   }
 });
 
-// DELETE USER (admin)
-app.delete("/api/admin/users/:id", protect, async (req, res) => {
+// DELETE USER
+app.delete("/api/admin/users/:id", protect, adminOnly, async (req, res) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
     await User.findByIdAndDelete(req.params.id);
     res.json({ message: "User deleted" });
   } catch (err) {
@@ -268,18 +678,19 @@ app.delete("/api/admin/users/:id", protect, async (req, res) => {
   }
 });
 
-// GET STATS (admin)
-app.get("/api/admin/stats", protect, async (req, res) => {
+// GET STATS
+app.get("/api/admin/stats", protect, adminOnly, async (req, res) => {
   try {
-    if (req.user.role !== "admin") return res.status(403).json({ message: "Admin only" });
-    const [totalUsers, totalJobs, totalApps, seafarers, companies] = await Promise.all([
+    const [totalUsers, totalJobs, totalApps, seafarers, companies, pendingPayments, pendingCVs] = await Promise.all([
       User.countDocuments(),
       Job.countDocuments(),
       Application.countDocuments(),
       User.countDocuments({ role: "seafarer" }),
       User.countDocuments({ role: "company" }),
+      Payment.countDocuments({ status: "pending" }),
+      CV.countDocuments({ status: "pending" }),
     ]);
-    res.json({ totalUsers, totalJobs, totalApps, seafarers, companies });
+    res.json({ totalUsers, totalJobs, totalApps, seafarers, companies, pendingPayments, pendingCVs });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
