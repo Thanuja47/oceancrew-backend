@@ -31,7 +31,7 @@ connectDB();
 // â”€â”€ NODEMAILER SETUP â”€â”€
 const createTransporter = () => {
   const user = process.env.EMAIL_USER || "oceancrewz47@gmail.com";
-  const pass = process.env.EMAIL_PASS || "Applez@222";
+  const pass = process.env.EMAIL_PASS || "xaqqex-tecDa3-rorfam";
   if (!user || !pass) return null;
   return nodemailer.createTransport({
     service: "gmail",
