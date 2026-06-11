@@ -444,6 +444,22 @@ app.post("/api/notifications/send", protect, async (req, res) => {
   try {
     const { userId, msg, icon, type, link } = req.body;
     const notif = await Notification.create({ userId, msg, icon: icon || "bell", type: type || "info", link });
+    
+    // Send email to the user
+    const user = await User.findById(userId);
+    if (user && user.email) {
+      const html = `
+        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
+          <h2 style="color:#0284C7;margin-bottom:8px;">New Notification from OceanCrew</h2>
+          <p style="color:#4a5568;margin-bottom:24px;">You have a new message from the administration team:</p>
+          <div style="background:#1a2332;border-radius:12px;padding:24px;margin-bottom:24px;color:#CBD5E1;">
+            ${msg}
+          </div>
+          <p style="color:#94A3B8;font-size:13px;">Please log in to your dashboard to view more details.</p>
+        </div>`;
+      await sendEmail(user.email, "OceanCrew Notification", html);
+    }
+    
     res.status(201).json(notif);
   } catch (err) {
     res.status(500).json({ message: err.message });
