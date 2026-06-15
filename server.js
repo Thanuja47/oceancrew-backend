@@ -4,7 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const helmet = require("helmet");
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 require("dotenv").config();
 
 const app = express();
@@ -28,28 +28,26 @@ const connectDB = async () => {
 };
 connectDB();
 
-// â”€â”€ NODEMAILER SETUP â”€â”€
-const createTransporter = () => {
-  const user = process.env.EMAIL_USER || "oceancrewz47@gmail.com";
-  const pass = process.env.EMAIL_PASS || "xaqqex-tecDa3-rorfam";
-  if (!user || !pass) return null;
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: { user, pass },
-  });
-};
+// ── RESEND EMAIL SETUP (HTTP API - works on Railway) ──
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const sendEmail = async (to, subject, html) => {
-  const transporter = createTransporter();
-  if (!transporter) {
-    console.log(`[EMAIL FALLBACK] To: ${to} | Subject: ${subject}`);
+  if (!process.env.RESEND_API_KEY) {
+    console.log(`[EMAIL FALLBACK] No RESEND_API_KEY. To: ${to} | Subject: ${subject}`);
     return true;
   }
   try {
-    await transporter.sendMail({
-      from: `"OceanCrew" <${process.env.EMAIL_USER || "oceancrewz47@gmail.com"}>`,
-      to, subject, html,
+    const { error } = await resend.emails.send({
+      from: "OceanCrew <onboarding@resend.dev>",
+      to,
+      subject,
+      html,
     });
+    if (error) {
+      console.error("Email send error:", error.message);
+      return false;
+    }
+    console.log(`Email sent to ${to}`);
     return true;
   } catch (err) {
     console.error("Email send error:", err.message);
@@ -57,9 +55,9 @@ const sendEmail = async (to, subject, html) => {
   }
 };
 
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-// â”€â”€ SCHEMAS â”€â”€
-// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// ════════════════════════════════════════════════════════
+// ── SCHEMAS ──
+// ════════════════════════════════════════════════════════
 
 // USER
 const userSchema = new mongoose.Schema({
