@@ -717,6 +717,145 @@ app.get("/api/admin/stats", protect, adminOnly, async (req, res) => {
   }
 });
 
+// ════════════════════════════════════════════════════════
+// ── STRIPE PAYMENTS ──
+// ════════════════════════════════════════════════════════
+
+// Stripe price IDs map (create these in your Stripe dashboard)
+// These are fallbacks — override with env vars for live mode
+const STRIPE_PRICES = {
+  "Seafarer Pro":     process.env.STRIPE_PRICE_SEAFARER_PRO    || "price_seafarer_pro",
+  "Professional":     process.env.STRIPE_PRICE_PROFESSIONAL    || "price_professional",
+  "Enterprise":       process.env.STRIPE_PRICE_ENTERPRISE      || "price_enterprise",
+};
+
+// CREATE STRIPE CHECKOUT SESSION
+app.post("/api/payments/stripe/create-checkout", protect, async (req, res) => {
+  if (!stripe) return res.status(503).json({ message: "Stripe not configured. Add STRIPE_SECRET_KEY to Railway." });
+  try {
+    const { plan, amount } = req.body;
+    if (!plan || !amount) return res.status(400).json({ message: "plan and amount are required" });
+
+    const frontendUrl = process.env.FRONTEND_URL || "https://oceancrew.vercel.app";
+
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      mode: "payment",
+      customer_email: req.user.email,
+      line_items: [{
+        price_data: {
+          currency: "usd",
+          unit_amount: Math.round(amount * 100), // cents
+          product_data: {
+            name: `OceanCrew — ${plan}`,
+            description: `OceanCrew ${plan} subscription`,
+            images: [],
+          },
+        },
+        quantity: 1,
+      }],
+      metadata: {
+        userId:   req.user._id.toString(),
+        plan,
+        amount:   amount.toString(),
+        userName: req.user.name,
+      },
+      success_url: `${frontendUrl}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${frontendUrl}?payment=cancelled`,
+    });
+
+    res.json({ url: session.url, sessionId: session.id });
+  } catch (err) {
+    console.error("Stripe checkout error:", err.message);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// STRIPE WEBHOOK — auto-approves card payments
+app.post("/api/payments/stripe/webhook",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    let event;
+    try {
+      if (webhookSecret) {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+      } else {
+        event = JSON.parse(req.body);
+      }
+    } catch (err) {
+      console.error("Webhook signature error:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object;
+      const { userId, plan, amount, userName } = session.metadata || {};
+
+      try {
+        // Create approved payment record
+        const payment = await Payment.create({
+          userId,
+          plan,
+          amount: parseFloat(amount),
+          method: "card",
+          status: "approved",
+          stripeSessionId: session.id,
+          reference: session.payment_intent,
+        });
+
+        // Notify user
+        await Notification.create({
+          userId,
+          msg: `🎉 Payment confirmed! Your ${plan} plan is now active.`,
+          icon: "checkCircle",
+          type: "payment",
+          link: "subscription",
+        });
+
+        // Send invoice email
+        const user = await User.findById(userId);
+        if (user?.email) {
+          const html = `
+            <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
+              <h2 style="color:#0284C7;">Payment Confirmed — OceanCrew ⚓</h2>
+              <p>Dear ${userName || user.name},</p>
+              <p>Your card payment was successful and your subscription is now <strong>active</strong>.</p>
+              <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+                <tr><td style="padding:8px;color:#64748b;">Plan</td><td style="padding:8px;font-weight:700;">${plan}</td></tr>
+                <tr><td style="padding:8px;color:#64748b;">Amount</td><td style="padding:8px;font-weight:700;">$${amount}</td></tr>
+                <tr><td style="padding:8px;color:#64748b;">Method</td><td style="padding:8px;">Credit / Debit Card (Stripe)</td></tr>
+                <tr><td style="padding:8px;color:#64748b;">Reference</td><td style="padding:8px;font-family:monospace;font-size:11px;">${session.payment_intent || session.id}</td></tr>
+              </table>
+              <p style="color:#94A3B8;font-size:12px;">Thank you for choosing OceanCrew. — OceanCrew Team</p>
+            </div>`;
+          await sendEmail(user.email, "OceanCrew — Payment Confirmed", html);
+        }
+
+        console.log(`Stripe payment approved: ${plan} for userId ${userId}`);
+      } catch (err) {
+        console.error("Webhook processing error:", err.message);
+      }
+    }
+
+    res.json({ received: true });
+  }
+);
+
+// GET STRIPE SESSION (for success page)
+app.get("/api/payments/stripe/session/:sessionId", protect, async (req, res) => {
+  if (!stripe) return res.status(503).json({ message: "Stripe not configured" });
+  try {
+    const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
+    const payment = await Payment.findOne({ stripeSessionId: req.params.sessionId });
+    res.json({ session, payment });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // ── HEALTH CHECK ──
 app.get("/api/health", (req, res) => res.json({ status: "OK", message: "OceanCrew API running" }));
 app.get("/", (req, res) => res.json({ status: "OK", message: "OceanCrew API" }));
