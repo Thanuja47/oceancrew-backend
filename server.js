@@ -634,7 +634,7 @@ app.put("/api/payments/:id", protect, adminOnly, async (req, res) => {
     await Notification.create({
       userId: payment.userId._id,
       msg: approved
-        ? `Your payment for ${payment.plan} plan has been approved! ðŸŽ‰`
+        ? `Your payment for ${payment.plan} plan has been approved!`
         : `Payment for ${payment.plan} plan was not approved. Contact support.`,
       icon: approved ? "checkCircle" : "xCircle",
       type: "payment",
