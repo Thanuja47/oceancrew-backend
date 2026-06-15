@@ -5,6 +5,7 @@ const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const helmet = require("helmet");
 const { Resend } = require("resend");
+const Stripe = require("stripe");
 require("dotenv").config();
 
 const app = express();
@@ -30,6 +31,11 @@ connectDB();
 
 // ── RESEND EMAIL SETUP (HTTP API - works on Railway) ──
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// ── STRIPE SETUP ──
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? Stripe(process.env.STRIPE_SECRET_KEY)
+  : null;
 
 const sendEmail = async (to, subject, html) => {
   if (!process.env.RESEND_API_KEY) {
@@ -131,14 +137,15 @@ const Notification = mongoose.models.Notification || mongoose.model("Notificatio
 
 // PAYMENT / SUBSCRIPTION
 const paymentSchema = new mongoose.Schema({
-  userId:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  plan:       { type: String },
-  amount:     { type: Number },
-  method:     { type: String, enum: ["bank_transfer", "card"], default: "bank_transfer" },
-  status:     { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
-  reference:  { type: String },
-  adminNote:  { type: String },
-  createdAt:  { type: Date, default: Date.now },
+  userId:            { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  plan:              { type: String },
+  amount:            { type: Number },
+  method:            { type: String, enum: ["bank_transfer", "card"], default: "bank_transfer" },
+  status:            { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  reference:         { type: String },
+  stripeSessionId:   { type: String },
+  adminNote:         { type: String },
+  createdAt:         { type: Date, default: Date.now },
 });
 const Payment = mongoose.models.Payment || mongoose.model("Payment", paymentSchema);
 
@@ -710,7 +717,7 @@ app.get("/api/admin/stats", protect, adminOnly, async (req, res) => {
   }
 });
 
-// â”€â”€ HEALTH CHECK â”€â”€
+// ── HEALTH CHECK ──
 app.get("/api/health", (req, res) => res.json({ status: "OK", message: "OceanCrew API running" }));
 app.get("/", (req, res) => res.json({ status: "OK", message: "OceanCrew API" }));
 
