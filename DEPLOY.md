@@ -26,10 +26,16 @@
    - Events: checkout.session.completed, customer.subscription.deleted
    - Copy webhook secret â†’ STRIPE_WEBHOOK_SECRET in .env
 
-## 4. Gmail for emails
-1. Google Account â†’ Security â†’ 2-Step Verification â†’ ON
-2. App Passwords â†’ Generate for Mail
-3. Use that 16-char password as EMAIL_PASS in .env
+## 4. Brevo for emails (HTTP API)
+Railway blocks outbound SMTP, so we send email over HTTPS via Brevo's API.
+1. Sign up free at https://www.brevo.com (300 emails/day free)
+2. Settings â†’ Senders & Domains â†’ Senders â†’ add and verify your sender
+   email address (click the link Brevo sends). No domain required for dev.
+3. Settings â†’ SMTP & API â†’ API Keys â†’ Generate a new API key
+4. Add to .env / Railway variables:
+   - BREVO_API_KEY    = the generated API key
+   - EMAIL_FROM       = the verified sender email
+   - EMAIL_FROM_NAME  = OceanCrew  (optional display name)
 
 ## 5. Deploy to Railway (Free)
 1. Go to https://railway.app

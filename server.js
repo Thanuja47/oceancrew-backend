@@ -4,7 +4,6 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const helmet = require("helmet");
-const nodemailer = require("nodemailer");
 const morgan = require("morgan");
 const logger = require("./utils/logger");
 require("dotenv").config();
@@ -31,28 +30,44 @@ const connectDB = async () => {
 };
 connectDB();
 
-// â”€â”€ NODEMAILER SETUP â”€â”€
-const createTransporter = () => {
-  const user = process.env.EMAIL_USER || "oceancrewz47@gmail.com";
-  const pass = process.env.EMAIL_PASS || "Applez@222";
-  if (!user || !pass) return null;
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: { user, pass },
-  });
-};
-
+// â”€â”€ EMAIL SETUP (Brevo HTTP API) â”€â”€
+// SMTP is blocked on Railway's network, so we send over HTTPS via Brevo's
+// transactional email API. Requires:
+//   BREVO_API_KEY  - API key from Brevo (Settings â†’ SMTP & API â†’ API Keys)
+//   EMAIL_FROM     - the sender address verified in Brevo
+//   EMAIL_FROM_NAME- optional display name (defaults to "OceanCrew")
 const sendEmail = async (to, subject, html) => {
-  const transporter = createTransporter();
-  if (!transporter) {
-    logger.warn(`[EMAIL FALLBACK] To: ${to} | Subject: ${subject}`);
+  const apiKey = process.env.BREVO_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
+  const fromName = process.env.EMAIL_FROM_NAME || "OceanCrew";
+
+  if (!apiKey || !fromEmail) {
+    logger.warn(`[EMAIL FALLBACK] BREVO_API_KEY/EMAIL_FROM not set. To: ${to} | Subject: ${subject}`);
     return true;
   }
+
   try {
-    await transporter.sendMail({
-      from: `"OceanCrew" <${process.env.EMAIL_USER || "oceancrewz47@gmail.com"}>`,
-      to, subject, html,
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
     });
+
+    if (!res.ok) {
+      const detail = await res.text();
+      logger.error(`Email send error: Brevo responded ${res.status} ${detail}`);
+      return false;
+    }
+
     logger.info(`Email sent to ${to}`);
     return true;
   } catch (err) {
