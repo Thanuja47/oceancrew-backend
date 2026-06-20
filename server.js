@@ -62,13 +62,14 @@ const sendEmail = async (to, subject, html) => {
       }),
     });
 
+    const detail = await res.text();
+
     if (!res.ok) {
-      const detail = await res.text();
       logger.error(`Email send error: Brevo responded ${res.status} ${detail}`);
       return false;
     }
 
-    logger.info(`Email sent to ${to}`);
+    logger.info(`Email sent to ${to} | Brevo response: ${detail}`);
     return true;
   } catch (err) {
     logger.error("Email send error: " + err.message);
