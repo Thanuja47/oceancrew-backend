@@ -77,6 +77,16 @@ const userSchema = new mongoose.Schema({
   approved:    { type: Boolean, default: false },
   resetOtp:    { type: String },
   resetOtpExpiry: { type: Date },
+  profilePicture: { type: String },
+  rankExperienceMonths: { type: Number },
+  lastVesselType: { type: String },
+  cdcNumber: { type: String },
+  passportNumber: { type: String },
+  city: { type: String },
+  address: { type: String },
+  dgShippingNumber: { type: String },
+  nationality: { type: String },
+  companyDescription: { type: String },
   createdAt:   { type: Date, default: Date.now },
 });
 const User = mongoose.models.User || mongoose.model("User", userSchema);
@@ -218,6 +228,35 @@ app.post("/api/auth/login", async (req, res) => {
 // GET MY PROFILE
 app.get("/api/auth/me", protect, async (req, res) => {
   res.json(req.user);
+});
+
+// UPDATE MY PROFILE
+app.put("/api/auth/profile", protect, async (req, res) => {
+  try {
+    const allowedUpdates = [
+      "name", "phone", "rank", "companyName", "profilePicture", "rankExperienceMonths",
+      "lastVesselType", "cdcNumber", "passportNumber", "city", "address",
+      "dgShippingNumber", "nationality", "companyDescription"
+    ];
+    
+    const updates = {};
+    for (const key of allowedUpdates) {
+      if (req.body[key] !== undefined) {
+        updates[key] = req.body[key];
+      }
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select("-password");
+
+    res.json(updatedUser);
+  } catch (err) {
+    console.error("Profile update error:", err);
+    res.status(500).json({ message: "Server error: " + err.message });
+  }
 });
 
 // FORGOT PASSWORD â€” sends OTP
@@ -393,7 +432,7 @@ app.put("/api/applications/:id", protect, async (req, res) => {
     // Create notification for seafarer
     if (appl.seafarer?._id) {
       const msgs = {
-        Shortlisted: { msg: `You have been shortlisted! â€” ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
+        Shortlisted: { msg: `You have been shortlisted! - ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
         Interview:   { msg: `Interview scheduled for ${appl.job?.title || "a job"}`, icon: "clock", type: "pipeline", link: "applications" },
         Offer:       { msg: `You received an offer! Review now.`, icon: "zap", type: "offer", link: "applications" },
         Hired:       { msg: `Congratulations! You have been hired.`, icon: "checkCircle", type: "pipeline", link: "applications" },
