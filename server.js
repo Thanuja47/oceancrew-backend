@@ -4,13 +4,14 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const helmet = require("helmet");
-const { Resend } = require("resend");
-const Stripe = require("stripe");
+const morgan = require("morgan");
+const logger = require("./utils/logger");
 require("dotenv").config();
 
 const app = express();
 
 // â”€â”€ MIDDLEWARE â”€â”€
+app.use(morgan("dev", { stream: { write: message => logger.info(message.trim()) } }));
 app.use(helmet());
 app.use(cors({ origin: "*" }));
 app.use(express.json({ limit: "20mb" }));
@@ -20,50 +21,65 @@ app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 const connectDB = async () => {
   try {
     const uri = process.env.MONGO_URI || process.env.MONGODB_URL;
-    if (!uri) { console.error("No MONGO_URI found!"); return; }
+    if (!uri) { logger.error("No MONGO_URI found!"); return; }
     await mongoose.connect(uri);
-    console.log("MongoDB connected");
+    logger.info("MongoDB connected");
   } catch (err) {
-    console.error("MongoDB connection error:", err.message);
+    logger.error("MongoDB connection error: " + err.message);
   }
 };
 connectDB();
 
-// ── RESEND EMAIL SETUP (HTTP API - works on Railway) ──
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-// ── STRIPE SETUP ──
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
-
+// â”€â”€ EMAIL SETUP (Brevo HTTP API) â”€â”€
+// SMTP is blocked on Railway's network, so we send over HTTPS via Brevo's
+// transactional email API. Requires:
+//   BREVO_API_KEY  - API key from Brevo (Settings â†’ SMTP & API â†’ API Keys)
+//   EMAIL_FROM     - the sender address verified in Brevo
+//   EMAIL_FROM_NAME- optional display name (defaults to "OceanCrew")
 const sendEmail = async (to, subject, html) => {
-  if (!process.env.RESEND_API_KEY) {
-    console.log(`[EMAIL FALLBACK] No RESEND_API_KEY. To: ${to} | Subject: ${subject}`);
+  const apiKey = process.env.BREVO_API_KEY;
+  const fromEmail = process.env.EMAIL_FROM;
+  const fromName = process.env.EMAIL_FROM_NAME || "OceanCrew";
+
+  if (!apiKey || !fromEmail) {
+    logger.warn(`[EMAIL FALLBACK] BREVO_API_KEY/EMAIL_FROM not set. To: ${to} | Subject: ${subject}`);
     return true;
   }
+
   try {
-    const { error } = await resend.emails.send({
-      from: "OceanCrew <onboarding@resend.dev>",
-      to,
-      subject,
-      html,
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "api-key": apiKey,
+        "content-type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        sender: { name: fromName, email: fromEmail },
+        to: [{ email: to }],
+        subject,
+        htmlContent: html,
+      }),
     });
-    if (error) {
-      console.error("Email send error:", error.message);
+
+    const detail = await res.text();
+
+    if (!res.ok) {
+      logger.error(`Email send error: Brevo responded ${res.status} ${detail}`);
       return false;
     }
-    console.log(`Email sent to ${to}`);
+
+    logger.info(`Email sent to ${to} | Brevo response: ${detail}`);
     return true;
   } catch (err) {
-    console.error("Email send error:", err.message);
+    logger.error("Email send error: " + err.message);
     return false;
   }
 };
 
-// ════════════════════════════════════════════════════════
-// ── SCHEMAS ──
-// ════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+// â”€â”€ SCHEMAS â”€â”€
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 // USER
 const userSchema = new mongoose.Schema({
@@ -77,16 +93,26 @@ const userSchema = new mongoose.Schema({
   approved:    { type: Boolean, default: false },
   resetOtp:    { type: String },
   resetOtpExpiry: { type: Date },
-  profilePicture: { type: String },
-  rankExperienceMonths: { type: Number },
-  lastVesselType: { type: String },
-  cdcNumber: { type: String },
-  passportNumber: { type: String },
-  city: { type: String },
-  address: { type: String },
-  dgShippingNumber: { type: String },
-  nationality: { type: String },
+  // â”€â”€ Seafarer Profile Fields â”€â”€
+  nationality:     { type: String },
+  dateOfBirth:     { type: String },
+  cdcNumber:       { type: String },
+  passportNumber:  { type: String },
+  passportExpiry:  { type: String },
+  experienceMonths:{ type: Number },
+  lastVesselType:  { type: String },
+  profilePhoto:    { type: String }, // Base64
+  availabilityDate:{ type: String },
+  // â”€â”€ Company Profile Fields â”€â”€
   companyDescription: { type: String },
+  address:     { type: String },
+  city:        { type: String },
+  country:     { type: String },
+  dgShippingNumber: { type: String },
+  numberOfVessels:  { type: Number },
+  vesselTypes:      { type: String },
+  companyLogo:      { type: String }, // Base64
+  website:          { type: String },
   createdAt:   { type: Date, default: Date.now },
 });
 const User = mongoose.models.User || mongoose.model("User", userSchema);
@@ -147,15 +173,14 @@ const Notification = mongoose.models.Notification || mongoose.model("Notificatio
 
 // PAYMENT / SUBSCRIPTION
 const paymentSchema = new mongoose.Schema({
-  userId:            { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-  plan:              { type: String },
-  amount:            { type: Number },
-  method:            { type: String, enum: ["bank_transfer", "card"], default: "bank_transfer" },
-  status:            { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
-  reference:         { type: String },
-  stripeSessionId:   { type: String },
-  adminNote:         { type: String },
-  createdAt:         { type: Date, default: Date.now },
+  userId:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  plan:       { type: String },
+  amount:     { type: Number },
+  method:     { type: String, enum: ["bank_transfer", "card"], default: "bank_transfer" },
+  status:     { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  reference:  { type: String },
+  adminNote:  { type: String },
+  createdAt:  { type: Date, default: Date.now },
 });
 const Payment = mongoose.models.Payment || mongoose.model("Payment", paymentSchema);
 
@@ -233,28 +258,23 @@ app.get("/api/auth/me", protect, async (req, res) => {
 // UPDATE MY PROFILE
 app.put("/api/auth/profile", protect, async (req, res) => {
   try {
-    const allowedUpdates = [
-      "name", "phone", "rank", "companyName", "profilePicture", "rankExperienceMonths",
-      "lastVesselType", "cdcNumber", "passportNumber", "city", "address",
-      "dgShippingNumber", "nationality", "companyDescription"
+    const allowedFields = [
+      "name", "phone", "rank", "companyName",
+      // Seafarer fields
+      "nationality", "dateOfBirth", "cdcNumber", "passportNumber",
+      "passportExpiry", "experienceMonths", "lastVesselType",
+      "profilePhoto", "availabilityDate",
+      // Company fields
+      "companyDescription", "address", "city", "country",
+      "dgShippingNumber", "numberOfVessels", "vesselTypes",
+      "companyLogo", "website",
     ];
-    
     const updates = {};
-    for (const key of allowedUpdates) {
-      if (req.body[key] !== undefined) {
-        updates[key] = req.body[key];
-      }
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      req.user._id,
-      { $set: updates },
-      { new: true, runValidators: true }
-    ).select("-password");
-
-    res.json(updatedUser);
+    allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+    const user = await User.findByIdAndUpdate(req.user._id, updates, { new: true }).select("-password");
+    res.json(user);
   } catch (err) {
-    console.error("Profile update error:", err);
+    logger.error("Profile Update Error: " + err.message);
     res.status(500).json({ message: "Server error: " + err.message });
   }
 });
@@ -432,7 +452,7 @@ app.put("/api/applications/:id", protect, async (req, res) => {
     // Create notification for seafarer
     if (appl.seafarer?._id) {
       const msgs = {
-        Shortlisted: { msg: `You have been shortlisted! - ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
+        Shortlisted: { msg: `You have been shortlisted! â€” ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
         Interview:   { msg: `Interview scheduled for ${appl.job?.title || "a job"}`, icon: "clock", type: "pipeline", link: "applications" },
         Offer:       { msg: `You received an offer! Review now.`, icon: "zap", type: "offer", link: "applications" },
         Hired:       { msg: `Congratulations! You have been hired.`, icon: "checkCircle", type: "pipeline", link: "applications" },
@@ -488,22 +508,6 @@ app.post("/api/notifications/send", protect, async (req, res) => {
   try {
     const { userId, msg, icon, type, link } = req.body;
     const notif = await Notification.create({ userId, msg, icon: icon || "bell", type: type || "info", link });
-    
-    // Send email to the user
-    const user = await User.findById(userId);
-    if (user && user.email) {
-      const html = `
-        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
-          <h2 style="color:#0284C7;margin-bottom:8px;">New Notification from OceanCrew</h2>
-          <p style="color:#4a5568;margin-bottom:24px;">You have a new message from the administration team:</p>
-          <div style="background:#1a2332;border-radius:12px;padding:24px;margin-bottom:24px;color:#CBD5E1;">
-            ${msg}
-          </div>
-          <p style="color:#94A3B8;font-size:13px;">Please log in to your dashboard to view more details.</p>
-        </div>`;
-      await sendEmail(user.email, "OceanCrew Notification", html);
-    }
-    
     res.status(201).json(notif);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -673,7 +677,7 @@ app.put("/api/payments/:id", protect, adminOnly, async (req, res) => {
     await Notification.create({
       userId: payment.userId._id,
       msg: approved
-        ? `Your payment for ${payment.plan} plan has been approved!`
+        ? `Your payment for ${payment.plan} plan has been approved! ðŸŽ‰`
         : `Payment for ${payment.plan} plan was not approved. Contact support.`,
       icon: approved ? "checkCircle" : "xCircle",
       type: "payment",
@@ -756,146 +760,7 @@ app.get("/api/admin/stats", protect, adminOnly, async (req, res) => {
   }
 });
 
-// ════════════════════════════════════════════════════════
-// ── STRIPE PAYMENTS ──
-// ════════════════════════════════════════════════════════
-
-// Stripe price IDs map (create these in your Stripe dashboard)
-// These are fallbacks — override with env vars for live mode
-const STRIPE_PRICES = {
-  "Seafarer Pro":     process.env.STRIPE_PRICE_SEAFARER_PRO    || "price_seafarer_pro",
-  "Professional":     process.env.STRIPE_PRICE_PROFESSIONAL    || "price_professional",
-  "Enterprise":       process.env.STRIPE_PRICE_ENTERPRISE      || "price_enterprise",
-};
-
-// CREATE STRIPE CHECKOUT SESSION
-app.post("/api/payments/stripe/create-checkout", protect, async (req, res) => {
-  if (!stripe) return res.status(503).json({ message: "Stripe not configured. Add STRIPE_SECRET_KEY to Railway." });
-  try {
-    const { plan, amount } = req.body;
-    if (!plan || !amount) return res.status(400).json({ message: "plan and amount are required" });
-
-    const frontendUrl = process.env.FRONTEND_URL || "https://oceancrew.vercel.app";
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      mode: "payment",
-      customer_email: req.user.email,
-      line_items: [{
-        price_data: {
-          currency: "usd",
-          unit_amount: Math.round(amount * 100), // cents
-          product_data: {
-            name: `OceanCrew — ${plan}`,
-            description: `OceanCrew ${plan} subscription`,
-            images: [],
-          },
-        },
-        quantity: 1,
-      }],
-      metadata: {
-        userId:   req.user._id.toString(),
-        plan,
-        amount:   amount.toString(),
-        userName: req.user.name,
-      },
-      success_url: `${frontendUrl}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${frontendUrl}?payment=cancelled`,
-    });
-
-    res.json({ url: session.url, sessionId: session.id });
-  } catch (err) {
-    console.error("Stripe checkout error:", err.message);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// STRIPE WEBHOOK — auto-approves card payments
-app.post("/api/payments/stripe/webhook",
-  express.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-    let event;
-    try {
-      if (webhookSecret) {
-        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-      } else {
-        event = JSON.parse(req.body);
-      }
-    } catch (err) {
-      console.error("Webhook signature error:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const { userId, plan, amount, userName } = session.metadata || {};
-
-      try {
-        // Create approved payment record
-        const payment = await Payment.create({
-          userId,
-          plan,
-          amount: parseFloat(amount),
-          method: "card",
-          status: "approved",
-          stripeSessionId: session.id,
-          reference: session.payment_intent,
-        });
-
-        // Notify user
-        await Notification.create({
-          userId,
-          msg: `🎉 Payment confirmed! Your ${plan} plan is now active.`,
-          icon: "checkCircle",
-          type: "payment",
-          link: "subscription",
-        });
-
-        // Send invoice email
-        const user = await User.findById(userId);
-        if (user?.email) {
-          const html = `
-            <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#f8faff;border-radius:16px;">
-              <h2 style="color:#0284C7;">Payment Confirmed — OceanCrew ⚓</h2>
-              <p>Dear ${userName || user.name},</p>
-              <p>Your card payment was successful and your subscription is now <strong>active</strong>.</p>
-              <table style="width:100%;border-collapse:collapse;margin:20px 0;">
-                <tr><td style="padding:8px;color:#64748b;">Plan</td><td style="padding:8px;font-weight:700;">${plan}</td></tr>
-                <tr><td style="padding:8px;color:#64748b;">Amount</td><td style="padding:8px;font-weight:700;">$${amount}</td></tr>
-                <tr><td style="padding:8px;color:#64748b;">Method</td><td style="padding:8px;">Credit / Debit Card (Stripe)</td></tr>
-                <tr><td style="padding:8px;color:#64748b;">Reference</td><td style="padding:8px;font-family:monospace;font-size:11px;">${session.payment_intent || session.id}</td></tr>
-              </table>
-              <p style="color:#94A3B8;font-size:12px;">Thank you for choosing OceanCrew. — OceanCrew Team</p>
-            </div>`;
-          await sendEmail(user.email, "OceanCrew — Payment Confirmed", html);
-        }
-
-        console.log(`Stripe payment approved: ${plan} for userId ${userId}`);
-      } catch (err) {
-        console.error("Webhook processing error:", err.message);
-      }
-    }
-
-    res.json({ received: true });
-  }
-);
-
-// GET STRIPE SESSION (for success page)
-app.get("/api/payments/stripe/session/:sessionId", protect, async (req, res) => {
-  if (!stripe) return res.status(503).json({ message: "Stripe not configured" });
-  try {
-    const session = await stripe.checkout.sessions.retrieve(req.params.sessionId);
-    const payment = await Payment.findOne({ stripeSessionId: req.params.sessionId });
-    res.json({ session, payment });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-// ── HEALTH CHECK ──
+// â”€â”€ HEALTH CHECK â”€â”€
 app.get("/api/health", (req, res) => res.json({ status: "OK", message: "OceanCrew API running" }));
 app.get("/", (req, res) => res.json({ status: "OK", message: "OceanCrew API" }));
 
