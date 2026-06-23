@@ -93,7 +93,7 @@ const userSchema = new mongoose.Schema({
   approved:    { type: Boolean, default: false },
   resetOtp:    { type: String },
   resetOtpExpiry: { type: Date },
-  // â”€â”€ Seafarer Profile Fields â”€â”€
+  // ── Seafarer Profile Fields ──
   nationality:     { type: String },
   dateOfBirth:     { type: String },
   cdcNumber:       { type: String },
@@ -102,8 +102,10 @@ const userSchema = new mongoose.Schema({
   experienceMonths:{ type: Number },
   lastVesselType:  { type: String },
   profilePhoto:    { type: String }, // Base64
+  profilePicture:  { type: String },
+  rankExperienceMonths: { type: Number },
   availabilityDate:{ type: String },
-  // â”€â”€ Company Profile Fields â”€â”€
+  // ── Company Profile Fields ──
   companyDescription: { type: String },
   address:     { type: String },
   city:        { type: String },
@@ -263,7 +265,7 @@ app.put("/api/auth/profile", protect, async (req, res) => {
       // Seafarer fields
       "nationality", "dateOfBirth", "cdcNumber", "passportNumber",
       "passportExpiry", "experienceMonths", "lastVesselType",
-      "profilePhoto", "availabilityDate",
+      "profilePhoto", "profilePicture", "rankExperienceMonths", "availabilityDate",
       // Company fields
       "companyDescription", "address", "city", "country",
       "dgShippingNumber", "numberOfVessels", "vesselTypes",
@@ -452,7 +454,7 @@ app.put("/api/applications/:id", protect, async (req, res) => {
     // Create notification for seafarer
     if (appl.seafarer?._id) {
       const msgs = {
-        Shortlisted: { msg: `You have been shortlisted! â€” ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
+        Shortlisted: { msg: `You have been shortlisted! - ${appl.job?.title || "a job"}`, icon: "star", type: "pipeline", link: "applications" },
         Interview:   { msg: `Interview scheduled for ${appl.job?.title || "a job"}`, icon: "clock", type: "pipeline", link: "applications" },
         Offer:       { msg: `You received an offer! Review now.`, icon: "zap", type: "offer", link: "applications" },
         Hired:       { msg: `Congratulations! You have been hired.`, icon: "checkCircle", type: "pipeline", link: "applications" },
