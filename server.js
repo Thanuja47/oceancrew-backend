@@ -8,6 +8,9 @@ const morgan = require("morgan");
 const logger = require("./utils/logger");
 require("dotenv").config();
 
+// Stripe setup
+const stripe = process.env.STRIPE_SECRET_KEY ? require("stripe")(process.env.STRIPE_SECRET_KEY) : null;
+
 const app = express();
 
 // â”€â”€ MIDDLEWARE â”€â”€
